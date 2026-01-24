@@ -8,7 +8,7 @@ This tool merges attendance reports from PollEverywhere into a Master Excel Shee
 
 ## Key Features
 
-* **Surgical Updates:** Uses openpyxl to modify specific cells in the Master Sheet, preserving all other formatting, formulas, and headers.
+* **Updates:** Uses openpyxl to modify specific cells in the Master Sheet, preserving all other formatting, formulas, and headers.
 * **Date Protection:** Automatically detects and skips the "Date Row" (Row 2) to prevent data corruption.
 * **Manual Override Safety:** If a student is absent in the Poll report but has a manually entered "1" (Present) or note in the Master Sheet, the tool will not overwrite it. It only fills empty cells.
 * **Zero-Installation:** Can be deployed to the web so TAs and staff can use it without installing Python.
