@@ -1,6 +1,6 @@
 # BioNB 2220 Attendance Tool
 
-<a href="https://bionb2220-attendance.streamlit.app/" target="_blank"><strong>Open Live Application (https://bionb2220-attendance.streamlit.app/)</strong></a>
+**Live Application:** https://bionb2220-attendance.streamlit.app/
 
 A Streamlit-based web application designed to automate the attendance tracking process for BioNB 2220 at Cornell University.
 
