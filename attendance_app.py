@@ -95,6 +95,8 @@ st.set_page_config(page_title="BioNB 2220 Attendance Tool")
 st.title("BioNB 2220 Attendance Tool")
 st.markdown("""
 This tool merges PollEverywhere reports into the Master Attendance Sheet.
+
+Created by: Sahil Desai
 """)
 
 st.divider()
