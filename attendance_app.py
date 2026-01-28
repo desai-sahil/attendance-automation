@@ -1,53 +1,87 @@
-import streamlit as st
-import pandas as pd
-import openpyxl
 import io
+import os
 from copy import copy
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
-# --- Helpers ---
+import openpyxl
+import pandas as pd
+import requests
+import streamlit as st
+
+
+# =========================================================
+# GitHub "Last updated" helper
+# =========================================================
+@st.cache_data(ttl=3600)  # cache for 1 hour (avoids rate-limit pain)
+def get_github_last_updated_str() -> str | None:
+    """
+    Returns a formatted "Last updated" timestamp from the most recent commit
+    that touched the configured file path in a GitHub repo.
+
+    Configure via Streamlit Secrets (preferred) or environment variables:
+      - GITHUB_OWNER        e.g. "sahildesai"
+      - GITHUB_REPO         e.g. "attendance-tool"
+      - GITHUB_BRANCH       e.g. "main"
+      - GITHUB_FILE_PATH    e.g. "attendance_app.py"
+      - GITHUB_TOKEN        (optional) needed for private repos / higher rate limits
+
+    If not configured or if request fails, returns None.
+    """
+    owner = st.secrets.get("GITHUB_OWNER", os.getenv("GITHUB_OWNER", "")).strip()
+    repo = st.secrets.get("GITHUB_REPO", os.getenv("GITHUB_REPO", "")).strip()
+    branch = st.secrets.get("GITHUB_BRANCH", os.getenv("GITHUB_BRANCH", "main")).strip()
+    path = st.secrets.get("GITHUB_FILE_PATH", os.getenv("GITHUB_FILE_PATH", "")).strip()
+    token = st.secrets.get("GITHUB_TOKEN", os.getenv("GITHUB_TOKEN", "")).strip()
+
+    if not (owner and repo and path):
+        return None
+
+    url = f"https://api.github.com/repos/{owner}/{repo}/commits"
+    params = {"path": path, "sha": branch, "per_page": 1}
+    headers = {"Accept": "application/vnd.github+json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    try:
+        r = requests.get(url, params=params, headers=headers, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+        if not data:
+            return None
+
+        iso_dt = data[0]["commit"]["committer"]["date"]  # e.g. 2026-01-28T15:04:05Z
+        dt_utc = datetime.fromisoformat(iso_dt.replace("Z", "+00:00"))
+        dt_local = dt_utc.astimezone(ZoneInfo("America/New_York"))
+        return dt_local.strftime("%b %d, %Y %I:%M %p ET")
+    except Exception:
+        return None
+
+
+# =========================================================
+# Helpers
+# =========================================================
 def _norm_email(x) -> str:
     return str(x or "").strip().lower()
 
-def _best_effort_name(row: pd.Series) -> dict:
-    """
-    Try to infer a student's name from common PollEverywhere export columns.
-    Returns dict with optional keys: first, last, full
-    """
-    # Common patterns: First Name / Last Name
-    first = str(row.get("First Name", "") or "").strip()
-    last = str(row.get("Last Name", "") or "").strip()
 
-    # Sometimes a single Name / Full Name column exists
-    full = ""
-    for k in ["Name", "Full Name", "Participant", "Student", "User", "Respondent"]:
-        if k in row.index:
-            candidate = str(row.get(k, "") or "").strip()
-            if candidate:
-                full = candidate
-                break
+def _is_blank(x) -> bool:
+    return x is None or str(x).strip() == ""
 
-    # If first/last missing but full exists, keep full only.
-    out = {}
-    if first:
-        out["first"] = first
-    if last:
-        out["last"] = last
-    if full:
-        out["full"] = full
-    return out
 
-def _find_header_col(ws, header_name: str):
-    """Return 1-based column index for a header in row 1, else None."""
+def _find_header_col_ci(ws, header_name: str):
+    """Case-insensitive header lookup in row 1. Returns 1-based col index or None."""
+    target = str(header_name).strip().lower()
     for cell in ws[1]:
-        if cell.value == header_name:
+        if cell.value is None:
+            continue
+        if str(cell.value).strip().lower() == target:
             return cell.column
     return None
 
+
 def _copy_row_style(ws, src_row: int, dst_row: int, max_col: int):
-    """
-    Copy style/formatting from src_row to dst_row (best-effort).
-    This helps the newly appended student row match the sheet formatting.
-    """
+    """Copy style/formatting from src_row to dst_row (best-effort)."""
     for col in range(1, max_col + 1):
         src = ws.cell(row=src_row, column=col)
         dst = ws.cell(row=dst_row, column=col)
@@ -60,53 +94,103 @@ def _copy_row_style(ws, src_row: int, dst_row: int, max_col: int):
         dst.alignment = copy(src.alignment)
         dst.protection = copy(src.protection)
 
+
 def _last_row_with_email(ws, email_col_idx: int, start_row: int = 3) -> int:
-    """Find the last row (>= start_row) that contains a non-empty email value."""
+    """Find last row (>= start_row) with a non-empty email value."""
     last = start_row - 1
     for r in range(start_row, ws.max_row + 1):
         v = ws.cell(row=r, column=email_col_idx).value
-        if v is not None and str(v).strip() != "":
+        if not _is_blank(v):
             last = r
     return last
 
 
-# --- Core Logic ---
-def process_attendance(master_file_obj, poll_file_obj, lecture_header, poll_search_string):
+def _pd_get_ci(row: pd.Series, wanted: str, default=""):
+    """Case-insensitive get for pandas Series by column name."""
+    wanted_l = wanted.strip().lower()
+    for c in row.index:
+        if str(c).strip().lower() == wanted_l:
+            v = row.get(c, default)
+            if pd.isna(v):
+                return default
+            return v
+    return default
+
+
+def _make_full_and_sortable(first: str, last: str):
+    first = str(first or "").strip()
+    last = str(last or "").strip()
+    full = (first + " " + last).strip()
+    if last and first:
+        sortable = f"{last}, {first}"
+    elif last:
+        sortable = last
+    else:
+        sortable = first
+    return full, sortable
+
+
+# =========================================================
+# Core logic
+# =========================================================
+def process_attendance(
+    master_file_obj,
+    poll_file_obj,
+    lecture_header: str,
+    poll_search_string: str,
+    backfill_names_if_blank: bool = True,
+):
     """
-    Reads files from memory, updates attendance, appends new students found in PollEverywhere,
-    and returns a binary stream of the saved Excel file.
+    Updates attendance for the specified lecture column using the PollEverywhere export,
+    and appends new students (email + names) found in Poll but missing from master.
+
+    Master sheet expectations (based on your provided file):
+      Row 1 = headers
+      Row 2 = date row (protected)
+      Row 3+ = student rows
+      Headers include: Full name, Sortable name, Email, Lecture 1..N
+
+    Poll expectations (based on your provided CSV):
+      Columns include: First name, Last name, Email, plus poll question columns
     """
-    # 1) Read Poll Data
+
+    # --- Read Poll file ---
     try:
-        if poll_file_obj.name.endswith(".csv"):
+        if poll_file_obj.name.lower().endswith(".csv"):
             df_poll = pd.read_csv(poll_file_obj)
         else:
             df_poll = pd.read_excel(poll_file_obj)
     except Exception as e:
-        return None, f"Error reading Poll file: {str(e)}"
+        return None, f"Error reading Poll file: {e}"
 
-    # Validate poll email column presence (best effort)
-    # (Original code hard-coded 'Email'. We'll keep that, but give a clearer error.)
-    if "Email" not in df_poll.columns:
+    # Require Email column in Poll (case-insensitive)
+    if not any(str(c).strip().lower() == "email" for c in df_poll.columns):
         return None, "Poll report must contain a column named 'Email'."
 
-    # Identify relevant question columns
-    target_poll_cols = [col for col in df_poll.columns if poll_search_string.lower() in str(col).lower()]
+    # Find relevant poll question columns by substring match
+    target_poll_cols = [c for c in df_poll.columns if poll_search_string.lower() in str(c).lower()]
     if not target_poll_cols:
-        return None, f"Could not find any columns in Poll report matching '{poll_search_string}'"
+        return None, f"Could not find any Poll columns matching '{poll_search_string}'."
 
-    # Build:
-    # - poll_students: email -> {'first','last','full'} (for roster reconciliation)
-    # - attendance_map: email -> 1 if answered_any among target_poll_cols
-    poll_students = {}
-    attendance_map = {}
+    # Build poll roster and attendance map
+    poll_students = {}   # email -> {"first","last","full","sortable"}
+    attendance_map = {}  # email -> 1 if answered any target column
 
     for _, row in df_poll.iterrows():
-        email = _norm_email(row.get("Email", ""))
+        email = _norm_email(_pd_get_ci(row, "Email", ""))
         if "@" not in email:
             continue
 
-        poll_students[email] = _best_effort_name(row)
+        first = str(_pd_get_ci(row, "First name", "") or "").strip()
+        last = str(_pd_get_ci(row, "Last name", "") or "").strip()
+        full, sortable = _make_full_and_sortable(first, last)
+
+        poll_students[email] = {
+            "first": first,
+            "last": last,
+            "full": full,
+            "sortable": sortable,
+        }
 
         answered_any = False
         for col in target_poll_cols:
@@ -121,122 +205,126 @@ def process_attendance(master_file_obj, poll_file_obj, lecture_header, poll_sear
     if not poll_students:
         return None, "No valid student emails were found in the Poll report."
 
-    # 2) Load Master Workbook
+    # --- Load Master workbook ---
     try:
         wb = openpyxl.load_workbook(master_file_obj)
         ws = wb.active
     except Exception as e:
-        return None, f"Error reading Master Excel file: {str(e)}"
+        return None, f"Error reading Master Excel file: {e}"
 
-    # Locate required columns in master
-    email_col_idx = _find_header_col(ws, "Email")
-    target_col_idx = _find_header_col(ws, lecture_header)
+    # Master columns (case-insensitive)
+    email_col_idx = _find_header_col_ci(ws, "Email")
+    full_name_col_idx = _find_header_col_ci(ws, "Full name")
+    sortable_name_col_idx = _find_header_col_ci(ws, "Sortable name")
+    lecture_col_idx = _find_header_col_ci(ws, lecture_header)
 
     if not email_col_idx:
-        return None, "Column 'Email' not found in Master Sheet Row 1."
-    if not target_col_idx:
-        return None, f"Column '{lecture_header}' not found in Master Sheet Row 1."
+        return None, "Column 'Email' not found in Master Sheet (row 1)."
+    if not lecture_col_idx:
+        return None, f"Column '{lecture_header}' not found in Master Sheet (row 1)."
 
-    # Optional name columns in master (best-effort)
-    first_col_idx = _find_header_col(ws, "First Name")
-    last_col_idx = _find_header_col(ws, "Last Name")
-    name_col_idx = _find_header_col(ws, "Name") or _find_header_col(ws, "Full Name")
-
-    # Build a set of emails already in master
-    master_emails = set()
-    for row_num in range(3, ws.max_row + 1):  # preserve your "row 2 is dates" assumption
-        cell_email = ws.cell(row=row_num, column=email_col_idx).value
-        if cell_email is None or str(cell_email).strip() == "":
+    # Map existing master emails to rows
+    master_email_to_row = {}
+    for r in range(3, ws.max_row + 1):
+        v = ws.cell(row=r, column=email_col_idx).value
+        if _is_blank(v):
             continue
-        master_emails.add(_norm_email(cell_email))
+        master_email_to_row[_norm_email(v)] = r
 
-    # 3) Append NEW students from poll report that aren't in master
-    # Find where to append
+    # --- Append NEW students missing from master ---
     last_student_row = _last_row_with_email(ws, email_col_idx, start_row=3)
     append_row = last_student_row + 1
-
-    # Copy formatting from the last student row (if it exists), else from row 3
     style_src_row = last_student_row if last_student_row >= 3 else 3
     max_col = ws.max_column
 
     added_count = 0
     for email, nm in poll_students.items():
-        if email in master_emails:
+        if email in master_email_to_row:
             continue
 
-        # Create new row with formatting
-        if style_src_row >= 3:
+        # Style new row like the last student row (keeps formatting consistent)
+        if ws.max_row >= style_src_row:
             _copy_row_style(ws, style_src_row, append_row, max_col)
 
-        # Fill cells
+        # Fill Email
         ws.cell(row=append_row, column=email_col_idx).value = email
 
-        # Prefer explicit First/Last columns if present
-        if first_col_idx and "first" in nm:
-            ws.cell(row=append_row, column=first_col_idx).value = nm["first"]
-        if last_col_idx and "last" in nm:
-            ws.cell(row=append_row, column=last_col_idx).value = nm["last"]
+        # Fill Full name and Sortable name per your rule
+        if full_name_col_idx:
+            ws.cell(row=append_row, column=full_name_col_idx).value = nm["full"]
+        if sortable_name_col_idx:
+            ws.cell(row=append_row, column=sortable_name_col_idx).value = nm["sortable"]
 
-        # If there's a "Name"/"Full Name" column, use it
-        if name_col_idx:
-            if "full" in nm and nm["full"].strip():
-                ws.cell(row=append_row, column=name_col_idx).value = nm["full"]
-            else:
-                # If we only have first/last, synthesize full name
-                first = nm.get("first", "").strip()
-                last = nm.get("last", "").strip()
-                full_guess = (first + " " + last).strip()
-                if full_guess:
-                    ws.cell(row=append_row, column=name_col_idx).value = full_guess
+        # Initialize lecture attendance for new student
+        ws.cell(row=append_row, column=lecture_col_idx).value = 1 if email in attendance_map else 0
 
-        # Initialize attendance value for this lecture:
-        # - 1 if they answered any relevant poll question
-        # - else 0 (since they appear on poll roster but didn't answer this set)
-        ws.cell(row=append_row, column=target_col_idx).value = 1 if email in attendance_map else 0
-
-        master_emails.add(email)
+        master_email_to_row[email] = append_row
         append_row += 1
         added_count += 1
 
-    # 4) Update attendance for existing rows (Start at Row 3 to protect Date Row)
-    updates_count = 0
-    for row_num in range(3, ws.max_row + 1):
-        cell_email = ws.cell(row=row_num, column=email_col_idx).value
-        if not cell_email:
-            continue
+    # --- Update attendance for everyone in master ---
+    updated_present_count = 0
+    wrote_zero_count = 0
+    backfilled_name_cells = 0
 
-        master_email = _norm_email(cell_email)
-
-        if master_email in attendance_map:
-            ws.cell(row=row_num, column=target_col_idx).value = 1
-            updates_count += 1
+    for email, r in master_email_to_row.items():
+        # Mark present
+        if email in attendance_map:
+            ws.cell(row=r, column=lecture_col_idx).value = 1
+            updated_present_count += 1
         else:
-            # Only overwrite if empty (preserve manual edits)
-            current_val = ws.cell(row=row_num, column=target_col_idx).value
-            if current_val is None or str(current_val).strip() == "":
-                ws.cell(row=row_num, column=target_col_idx).value = 0
+            # Only write 0 if blank to preserve manual edits
+            cur = ws.cell(row=r, column=lecture_col_idx).value
+            if _is_blank(cur):
+                ws.cell(row=r, column=lecture_col_idx).value = 0
+                wrote_zero_count += 1
 
-    # 5) Save to Memory Buffer
+        # Optional name backfill (only when blank in master)
+        if backfill_names_if_blank and (email in poll_students):
+            nm = poll_students[email]
+            if full_name_col_idx:
+                cur_full = ws.cell(row=r, column=full_name_col_idx).value
+                if _is_blank(cur_full) and not _is_blank(nm["full"]):
+                    ws.cell(row=r, column=full_name_col_idx).value = nm["full"]
+                    backfilled_name_cells += 1
+            if sortable_name_col_idx:
+                cur_sort = ws.cell(row=r, column=sortable_name_col_idx).value
+                if _is_blank(cur_sort) and not _is_blank(nm["sortable"]):
+                    ws.cell(row=r, column=sortable_name_col_idx).value = nm["sortable"]
+                    backfilled_name_cells += 1
+
+    # --- Save result to buffer ---
     output_buffer = io.BytesIO()
     wb.save(output_buffer)
     output_buffer.seek(0)
 
-    return (
-        output_buffer,
-        f"Success. Updated {updates_count} students for '{lecture_header}'. "
-        f"Added {added_count} new students from Poll report."
+    msg = (
+        f"Success. Present=1 set for {updated_present_count} students in '{lecture_header}'. "
+        f"Absent=0 written for {wrote_zero_count} blank cells. "
+        f"Added {added_count} new students. "
     )
+    if backfill_names_if_blank:
+        msg += f"Backfilled {backfilled_name_cells} name cells."
+
+    return output_buffer, msg
 
 
-# --- Streamlit Interface ---
+# =========================================================
+# Streamlit UI
+# =========================================================
 st.set_page_config(page_title="BioNB 2220 Attendance Tool")
 
 st.title("BioNB 2220 Attendance Tool")
+
+last_updated = get_github_last_updated_str()
+last_updated_line = f"Last updated: {last_updated}" if last_updated else "Last updated: (not configured)"
+
 st.markdown(
-    """
+    f"""
 This tool merges PollEverywhere reports into the Master Attendance Sheet.
 
-Created by: Sahil Desai
+Created by: Sahil Desai  
+{last_updated_line}
 """
 )
 
@@ -245,38 +333,55 @@ st.divider()
 col1, col2 = st.columns(2)
 
 with col1:
-    st.subheader("1. Upload Files")
+    st.subheader("1) Upload files")
     master_file = st.file_uploader("Upload Master Excel (xlsx)", type=["xlsx"])
-    poll_file = st.file_uploader("Upload Poll Report (csv/xlsx)", type=["csv", "xlsx"])
+    poll_file = st.file_uploader("Upload Poll report (csv/xlsx)", type=["csv", "xlsx"])
 
 with col2:
-    st.subheader("2. Settings")
-    lecture_header = st.text_input("Master Attendance sheet column name", placeholder="e.g., Lecture 2")
-    poll_string = st.text_input("Poll search string in PollEV report", placeholder="e.g., Lecture 2")
-    st.info(
-        f"The tool will search for columns containing '{poll_string}' in the Poll Report and map them to '{lecture_header}' in the Master Sheet."
+    st.subheader("2) Settings")
+    lecture_header = st.text_input("Master attendance column name", placeholder="e.g., Lecture 3")
+    poll_string = st.text_input("Poll column search string", placeholder="e.g., Lecture 3")
+    backfill_names = st.checkbox(
+        "Backfill names for existing students (only if blank in master)",
+        value=True,
     )
+
+st.info(
+    "A student is marked present (1) if they answered ANY poll question column that matches your search string. "
+    "New students found in the Poll report are appended to the master sheet with Email + Full name + Sortable name."
+)
 
 st.divider()
 
 if st.button("Process Attendance", type="primary"):
     if not master_file or not poll_file or not lecture_header or not poll_string:
-        st.error("Please upload both files and fill in all text fields.")
+        st.error("Please upload both files and fill in all settings.")
     else:
         with st.spinner("Processing files..."):
-            result_file, message = process_attendance(master_file, poll_file, lecture_header, poll_string)
+            result_file, message = process_attendance(
+                master_file,
+                poll_file,
+                lecture_header=lecture_header,
+                poll_search_string=poll_string,
+                backfill_names_if_blank=backfill_names,
+            )
 
-            if result_file is None:
-                st.error(f"{message}")
-            else:
-                st.success(f"{message}")
+        if result_file is None:
+            st.error(message)
+        else:
+            st.success(message)
 
-                original_name = master_file.name.replace(".xlsx", "")
-                new_filename = f"{original_name}_UPDATED.xlsx"
+            base = master_file.name.rsplit(".", 1)[0]
+            new_filename = f"{base}_UPDATED.xlsx"
 
-                st.download_button(
-                    label="Download Updated Master Sheet",
-                    data=result_file,
-                    file_name=new_filename,
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                )
+            st.download_button(
+                label="Download Updated Master Sheet",
+                data=result_file,
+                file_name=new_filename,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+
+st.caption(
+    "GitHub Last Updated setup: add Secrets for GITHUB_OWNER, GITHUB_REPO, GITHUB_BRANCH, GITHUB_FILE_PATH "
+    "(and optionally GITHUB_TOKEN)."
+)
