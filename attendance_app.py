@@ -1,7 +1,7 @@
 import io
 import os
 from copy import copy
-from datetime import datetime
+from datetime import datetime, date
 from zoneinfo import ZoneInfo
 
 import openpyxl
@@ -20,13 +20,11 @@ def get_github_last_updated_str() -> str | None:
     that touched the configured file path in a GitHub repo.
 
     Configure via Streamlit Secrets (preferred) or environment variables:
-      - GITHUB_OWNER        e.g. "sahildesai"
-      - GITHUB_REPO         e.g. "attendance-tool"
-      - GITHUB_BRANCH       e.g. "main"
-      - GITHUB_FILE_PATH    e.g. "attendance_app.py"
-      - GITHUB_TOKEN        (optional) needed for private repos / higher rate limits
-
-    If not configured or if request fails, returns None.
+      - GITHUB_OWNER
+      - GITHUB_REPO
+      - GITHUB_BRANCH
+      - GITHUB_FILE_PATH
+      - GITHUB_TOKEN (optional)
     """
     owner = st.secrets.get("GITHUB_OWNER", os.getenv("GITHUB_OWNER", "")).strip()
     repo = st.secrets.get("GITHUB_REPO", os.getenv("GITHUB_REPO", "")).strip()
@@ -130,29 +128,121 @@ def _make_full_and_sortable(first: str, last: str):
     return full, sortable
 
 
+def _cell_text(x) -> str:
+    return str(x or "").strip()
+
+
+def _cell_text_lower(x) -> str:
+    return _cell_text(x).lower()
+
+
+def _date_like_equal(a, b: date) -> bool:
+    """
+    Compare ws row1 cell (could be datetime/date/string) to a date object b.
+    """
+    if a is None:
+        return False
+
+    if isinstance(a, datetime):
+        return a.date() == b
+    if isinstance(a, date):
+        return a == b
+
+    # If stored as string like "21-Jan" or "1/28/2026", try a few parses
+    s = str(a).strip()
+    for fmt in ("%m/%d/%Y", "%m/%d/%y", "%m-%d-%Y", "%Y-%m-%d", "%d-%b", "%d-%b-%Y", "%b %d, %Y"):
+        try:
+            dt = datetime.strptime(s, fmt)
+            # If format has no year (e.g. %d-%b), dt defaults to 1900; in that case compare month/day only
+            if fmt == "%d-%b":
+                return (dt.month, dt.day) == (b.month, b.day)
+            return dt.date() == b
+        except Exception:
+            pass
+    return False
+
+
+def _ensure_lecture_column(ws, lecture_label: str, lecture_date: date) -> int:
+    """
+    Ensure there is a column whose row2 equals lecture_label (case-insensitive).
+    If multiple matches, prefer one whose row1 matches lecture_date.
+    If none, append new column at end and set row1=date, row2=lecture_label.
+
+    Returns 1-based column index.
+    """
+    lecture_label_l = lecture_label.strip().lower()
+
+    matches = []
+    for col in range(1, ws.max_column + 1):
+        v2 = ws.cell(row=2, column=col).value
+        if _cell_text_lower(v2) == lecture_label_l:
+            matches.append(col)
+
+    if len(matches) == 1:
+        col_idx = matches[0]
+    elif len(matches) > 1:
+        # Prefer matching date in row1
+        preferred = None
+        for col in matches:
+            v1 = ws.cell(row=1, column=col).value
+            if _date_like_equal(v1, lecture_date):
+                preferred = col
+                break
+        col_idx = preferred if preferred is not None else matches[0]
+    else:
+        # Append new column
+        col_idx = ws.max_column + 1
+
+        # Try to copy style from previous column (optional)
+        src_col = ws.max_column  # previous last col
+        for r in range(1, ws.max_row + 1):
+            src = ws.cell(row=r, column=src_col)
+            dst = ws.cell(row=r, column=col_idx)
+            if src.has_style:
+                dst._style = copy(src._style)
+            dst.number_format = src.number_format
+            dst.font = copy(src.font)
+            dst.fill = copy(src.fill)
+            dst.border = copy(src.border)
+            dst.alignment = copy(src.alignment)
+            dst.protection = copy(src.protection
+
+            )
+
+    # Set header cells (row1=date, row2=Lecture X)
+    c1 = ws.cell(row=1, column=col_idx)
+    c1.value = lecture_date  # store as a true date
+    c1.number_format = "d-mmm"  # display like 21-Jan (adjust if you prefer)
+
+    c2 = ws.cell(row=2, column=col_idx)
+    c2.value = lecture_label  # guarantees capital L
+
+    return col_idx
+
+
 # =========================================================
 # Core logic
 # =========================================================
 def process_attendance(
     master_file_obj,
     poll_file_obj,
-    lecture_header: str,
+    lecture_number: int,
+    lecture_date: date,
     poll_search_string: str,
     backfill_names_if_blank: bool = True,
 ):
     """
-    Updates attendance for the specified lecture column using the PollEverywhere export,
+    Updates attendance for the specified lecture using the PollEverywhere export,
     and appends new students (email + names) found in Poll but missing from master.
 
-    Master sheet expectations (based on your provided file):
-      Row 1 = headers
-      Row 2 = date row (protected)
+    Master sheet expectations:
+      Row 1 = date headers for lecture columns (and normal headers for student info cols)
+      Row 2 = lecture labels ("Lecture 1", "Lecture 2", ...)
       Row 3+ = student rows
-      Headers include: Full name, Sortable name, Email, Lecture 1..N
-
-    Poll expectations (based on your provided CSV):
-      Columns include: First name, Last name, Email, plus poll question columns
+      Student info headers include: Full name, Sortable name, Email (SIS Id optional)
     """
+
+    lecture_label = f"Lecture {int(lecture_number)}"  # capital L enforced
 
     # --- Read Poll file ---
     try:
@@ -212,16 +302,16 @@ def process_attendance(
     except Exception as e:
         return None, f"Error reading Master Excel file: {e}"
 
-    # Master columns (case-insensitive)
+    # Master columns (case-insensitive) for roster fields
     email_col_idx = _find_header_col_ci(ws, "Email")
     full_name_col_idx = _find_header_col_ci(ws, "Full name")
     sortable_name_col_idx = _find_header_col_ci(ws, "Sortable name")
-    lecture_col_idx = _find_header_col_ci(ws, lecture_header)
 
     if not email_col_idx:
         return None, "Column 'Email' not found in Master Sheet (row 1)."
-    if not lecture_col_idx:
-        return None, f"Column '{lecture_header}' not found in Master Sheet (row 1)."
+
+    # Ensure / create lecture attendance column
+    lecture_col_idx = _ensure_lecture_column(ws, lecture_label, lecture_date)
 
     # Map existing master emails to rows
     master_email_to_row = {}
@@ -299,7 +389,8 @@ def process_attendance(
     output_buffer.seek(0)
 
     msg = (
-        f"Success. Present=1 set for {updated_present_count} students in '{lecture_header}'. "
+        f"Success. Used column '{lecture_label}' dated {lecture_date.strftime('%b %d, %Y')}. "
+        f"Present=1 set for {updated_present_count} students. "
         f"Absent=0 written for {wrote_zero_count} blank cells. "
         f"Added {added_count} new students. "
     )
@@ -338,30 +429,38 @@ with col1:
     poll_file = st.file_uploader("Upload Poll report (csv/xlsx)", type=["csv", "xlsx"])
 
 with col2:
-    st.subheader("2) Settings")
-    lecture_header = st.text_input("Master attendance column name", placeholder="e.g., Lecture 3")
+    st.subheader("2) Lecture settings")
+    lecture_number = st.number_input("Lecture number", min_value=1, step=1, value=1)
+    lecture_date = st.date_input("Lecture date", value=date.today())
+
+    st.subheader("3) Poll matching")
     poll_string = st.text_input("Poll column search string", placeholder="e.g., Lecture 3")
+
     backfill_names = st.checkbox(
         "Backfill names for existing students (only if blank in master)",
         value=True,
     )
 
+lecture_label_preview = f"Lecture {int(lecture_number)}"
 st.info(
-    "A student is marked present (1) if they answered ANY poll question column that matches your search string. "
-    "New students found in the Poll report are appended to the master sheet with Email + Full name + Sortable name."
+    "Attendance logic: a student is marked present (1) if they answered ANY poll question column "
+    "that matches your search string. "
+    "Lecture column is auto-created if missing: row 1 = date, row 2 = lecture label."
 )
+st.write(f"**This run will write into:** `{lecture_label_preview}` (capital L) with date `{lecture_date.strftime('%b %d, %Y')}`")
 
 st.divider()
 
 if st.button("Process Attendance", type="primary"):
-    if not master_file or not poll_file or not lecture_header or not poll_string:
-        st.error("Please upload both files and fill in all settings.")
+    if not master_file or not poll_file or not poll_string:
+        st.error("Please upload both files and fill in the Poll column search string.")
     else:
         with st.spinner("Processing files..."):
             result_file, message = process_attendance(
                 master_file,
                 poll_file,
-                lecture_header=lecture_header,
+                lecture_number=int(lecture_number),
+                lecture_date=lecture_date,
                 poll_search_string=poll_string,
                 backfill_names_if_blank=backfill_names,
             )
