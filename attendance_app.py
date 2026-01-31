@@ -5,6 +5,9 @@ from datetime import datetime, date
 from zoneinfo import ZoneInfo
 
 import openpyxl
+from openpyxl.utils import get_column_letter
+from openpyxl.styles import Alignment
+
 import pandas as pd
 import requests
 import streamlit as st
@@ -65,6 +68,14 @@ def _norm_email(x) -> str:
 
 def _is_blank(x) -> bool:
     return x is None or str(x).strip() == ""
+
+
+def _cell_text(x) -> str:
+    return str(x or "").strip()
+
+
+def _cell_text_lower(x) -> str:
+    return _cell_text(x).lower()
 
 
 def _find_header_col_ci(ws, header_name: str):
@@ -128,14 +139,6 @@ def _make_full_and_sortable(first: str, last: str):
     return full, sortable
 
 
-def _cell_text(x) -> str:
-    return str(x or "").strip()
-
-
-def _cell_text_lower(x) -> str:
-    return _cell_text(x).lower()
-
-
 def _date_like_equal(a, b: date) -> bool:
     """
     Compare ws row1 cell (could be datetime/date/string) to a date object b.
@@ -148,12 +151,18 @@ def _date_like_equal(a, b: date) -> bool:
     if isinstance(a, date):
         return a == b
 
-    # If stored as string like "21-Jan" or "1/28/2026", try a few parses
     s = str(a).strip()
-    for fmt in ("%m/%d/%Y", "%m/%d/%y", "%m-%d-%Y", "%Y-%m-%d", "%d-%b", "%d-%b-%Y", "%b %d, %Y"):
+    for fmt in (
+        "%m/%d/%Y",
+        "%m/%d/%y",
+        "%m-%d-%Y",
+        "%Y-%m-%d",
+        "%d-%b",
+        "%d-%b-%Y",
+        "%b %d, %Y",
+    ):
         try:
             dt = datetime.strptime(s, fmt)
-            # If format has no year (e.g. %d-%b), dt defaults to 1900; in that case compare month/day only
             if fmt == "%d-%b":
                 return (dt.month, dt.day) == (b.month, b.day)
             return dt.date() == b
@@ -162,60 +171,75 @@ def _date_like_equal(a, b: date) -> bool:
     return False
 
 
+def _set_column_width(ws, col_idx: int, width: float):
+    ws.column_dimensions[get_column_letter(col_idx)].width = width
+
+
+def _last_used_col_by_headers(ws, header_rows=(1, 2), min_col=1) -> int:
+    """
+    Returns the last column index that has any non-empty cell in the given header rows.
+    This avoids ws.max_column being inflated by formatting.
+    """
+    last = min_col
+    for col in range(min_col, ws.max_column + 1):
+        for r in header_rows:
+            if not _is_blank(ws.cell(row=r, column=col).value):
+                last = col
+                break
+    return last
+
+
 def _ensure_lecture_column(ws, lecture_label: str, lecture_date: date) -> int:
     """
     Ensure there is a column whose row2 equals lecture_label (case-insensitive).
-    If multiple matches, prefer one whose row1 matches lecture_date.
-    If none, append new column at end and set row1=date, row2=lecture_label.
+    If none exists, append it immediately after the last *actually used* header column.
 
-    Returns 1-based column index.
+    Enforces formatting:
+      - row1: date with "d-mmm" format
+      - row2: text
+      - rows 3+: integer "0" format (prevents ##### and date rendering)
     """
-    lecture_label_l = lecture_label.strip().lower()
+    lecture_label_clean = lecture_label.strip()
+    lecture_label_l = lecture_label_clean.lower()
 
+    # 1) Find existing matches in row 2
     matches = []
     for col in range(1, ws.max_column + 1):
         v2 = ws.cell(row=2, column=col).value
         if _cell_text_lower(v2) == lecture_label_l:
             matches.append(col)
 
+    # 2) Choose best match if multiple
     if len(matches) == 1:
         col_idx = matches[0]
     elif len(matches) > 1:
-        # Prefer matching date in row1
-        preferred = None
-        for col in matches:
-            v1 = ws.cell(row=1, column=col).value
+        col_idx = matches[0]
+        for c in matches:
+            v1 = ws.cell(row=1, column=c).value
             if _date_like_equal(v1, lecture_date):
-                preferred = col
+                col_idx = c
                 break
-        col_idx = preferred if preferred is not None else matches[0]
     else:
-        # Append new column
-        col_idx = ws.max_column + 1
+        # 3) Append after last REAL header column (not ws.max_column)
+        last_used = _last_used_col_by_headers(ws, header_rows=(1, 2), min_col=1)
+        col_idx = last_used + 1
 
-        # Try to copy style from previous column (optional)
-        src_col = ws.max_column  # previous last col
-        for r in range(1, ws.max_row + 1):
-            src = ws.cell(row=r, column=src_col)
-            dst = ws.cell(row=r, column=col_idx)
-            if src.has_style:
-                dst._style = copy(src._style)
-            dst.number_format = src.number_format
-            dst.font = copy(src.font)
-            dst.fill = copy(src.fill)
-            dst.border = copy(src.border)
-            dst.alignment = copy(src.alignment)
-            dst.protection = copy(src.protection
-
-            )
-
-    # Set header cells (row1=date, row2=Lecture X)
+    # 4) Write headers
     c1 = ws.cell(row=1, column=col_idx)
-    c1.value = lecture_date  # store as a true date
-    c1.number_format = "d-mmm"  # display like 21-Jan (adjust if you prefer)
+    c1.value = lecture_date
+    c1.number_format = "d-mmm"  # e.g. 23-Jan
 
     c2 = ws.cell(row=2, column=col_idx)
-    c2.value = lecture_label  # guarantees capital L
+    c2.value = lecture_label_clean  # ensures capital L
+
+    # 5) Make column wide enough to avoid #####
+    _set_column_width(ws, col_idx, 10)
+
+    # 6) Force attendance format for the column
+    for r in range(3, ws.max_row + 1):
+        cell = ws.cell(row=r, column=col_idx)
+        cell.number_format = "0"
+        cell.alignment = Alignment(horizontal="center", vertical="center")
 
     return col_idx
 
@@ -241,7 +265,6 @@ def process_attendance(
       Row 3+ = student rows
       Student info headers include: Full name, Sortable name, Email (SIS Id optional)
     """
-
     lecture_label = f"Lecture {int(lecture_number)}"  # capital L enforced
 
     # --- Read Poll file ---
@@ -262,7 +285,7 @@ def process_attendance(
     if not target_poll_cols:
         return None, f"Could not find any Poll columns matching '{poll_search_string}'."
 
-    # Build poll roster and attendance map
+    # Build poll roster + attendance map
     poll_students = {}   # email -> {"first","last","full","sortable"}
     attendance_map = {}  # email -> 1 if answered any target column
 
@@ -275,12 +298,7 @@ def process_attendance(
         last = str(_pd_get_ci(row, "Last name", "") or "").strip()
         full, sortable = _make_full_and_sortable(first, last)
 
-        poll_students[email] = {
-            "first": first,
-            "last": last,
-            "full": full,
-            "sortable": sortable,
-        }
+        poll_students[email] = {"first": first, "last": last, "full": full, "sortable": sortable}
 
         answered_any = False
         for col in target_poll_cols:
@@ -302,7 +320,7 @@ def process_attendance(
     except Exception as e:
         return None, f"Error reading Master Excel file: {e}"
 
-    # Master columns (case-insensitive) for roster fields
+    # Roster columns (row 1 headers)
     email_col_idx = _find_header_col_ci(ws, "Email")
     full_name_col_idx = _find_header_col_ci(ws, "Full name")
     sortable_name_col_idx = _find_header_col_ci(ws, "Sortable name")
@@ -310,10 +328,10 @@ def process_attendance(
     if not email_col_idx:
         return None, "Column 'Email' not found in Master Sheet (row 1)."
 
-    # Ensure / create lecture attendance column
+    # Ensure / create lecture column based on row2 label + row1 date
     lecture_col_idx = _ensure_lecture_column(ws, lecture_label, lecture_date)
 
-    # Map existing master emails to rows
+    # Map existing master emails -> row
     master_email_to_row = {}
     for r in range(3, ws.max_row + 1):
         v = ws.cell(row=r, column=email_col_idx).value
@@ -332,21 +350,22 @@ def process_attendance(
         if email in master_email_to_row:
             continue
 
-        # Style new row like the last student row (keeps formatting consistent)
+        # Copy style from last student row for consistency
         if ws.max_row >= style_src_row:
             _copy_row_style(ws, style_src_row, append_row, max_col)
 
-        # Fill Email
         ws.cell(row=append_row, column=email_col_idx).value = email
 
-        # Fill Full name and Sortable name per your rule
         if full_name_col_idx:
             ws.cell(row=append_row, column=full_name_col_idx).value = nm["full"]
         if sortable_name_col_idx:
             ws.cell(row=append_row, column=sortable_name_col_idx).value = nm["sortable"]
 
-        # Initialize lecture attendance for new student
-        ws.cell(row=append_row, column=lecture_col_idx).value = 1 if email in attendance_map else 0
+        # Initialize attendance
+        att_cell = ws.cell(row=append_row, column=lecture_col_idx)
+        att_cell.value = 1 if email in attendance_map else 0
+        att_cell.number_format = "0"
+        att_cell.alignment = Alignment(horizontal="center", vertical="center")
 
         master_email_to_row[email] = append_row
         append_row += 1
@@ -358,18 +377,22 @@ def process_attendance(
     backfilled_name_cells = 0
 
     for email, r in master_email_to_row.items():
-        # Mark present
         if email in attendance_map:
-            ws.cell(row=r, column=lecture_col_idx).value = 1
+            cell = ws.cell(row=r, column=lecture_col_idx)
+            cell.value = 1
+            cell.number_format = "0"
+            cell.alignment = Alignment(horizontal="center", vertical="center")
             updated_present_count += 1
         else:
-            # Only write 0 if blank to preserve manual edits
-            cur = ws.cell(row=r, column=lecture_col_idx).value
-            if _is_blank(cur):
-                ws.cell(row=r, column=lecture_col_idx).value = 0
+            # Only write 0 if blank (preserve manual edits)
+            cell = ws.cell(row=r, column=lecture_col_idx)
+            if _is_blank(cell.value):
+                cell.value = 0
+                cell.number_format = "0"
+                cell.alignment = Alignment(horizontal="center", vertical="center")
                 wrote_zero_count += 1
 
-        # Optional name backfill (only when blank in master)
+        # Optional name backfill
         if backfill_names_if_blank and (email in poll_students):
             nm = poll_students[email]
             if full_name_col_idx:
@@ -383,7 +406,7 @@ def process_attendance(
                     ws.cell(row=r, column=sortable_name_col_idx).value = nm["sortable"]
                     backfilled_name_cells += 1
 
-    # --- Save result to buffer ---
+    # --- Save result ---
     output_buffer = io.BytesIO()
     wb.save(output_buffer)
     output_buffer.seek(0)
@@ -404,7 +427,6 @@ def process_attendance(
 # Streamlit UI
 # =========================================================
 st.set_page_config(page_title="BioNB 2220 Attendance Tool")
-
 st.title("BioNB 2220 Attendance Tool")
 
 last_updated = get_github_last_updated_str()
@@ -434,7 +456,11 @@ with col2:
     lecture_date = st.date_input("Lecture date", value=date.today())
 
     st.subheader("3) Poll matching")
-    poll_string = st.text_input("Poll column search string", placeholder="e.g., Lecture 3")
+    poll_string = st.text_input(
+        "Poll column search string",
+        value=f"Lecture {int(lecture_number)}",
+        help="We mark a student present if they answered ANY poll column containing this string.",
+    )
 
     backfill_names = st.checkbox(
         "Backfill names for existing students (only if blank in master)",
@@ -444,10 +470,11 @@ with col2:
 lecture_label_preview = f"Lecture {int(lecture_number)}"
 st.info(
     "Attendance logic: a student is marked present (1) if they answered ANY poll question column "
-    "that matches your search string. "
-    "Lecture column is auto-created if missing: row 1 = date, row 2 = lecture label."
+    "that matches your search string. New students found in the Poll report are appended to the master sheet."
 )
-st.write(f"**This run will write into:** `{lecture_label_preview}` (capital L) with date `{lecture_date.strftime('%b %d, %Y')}`")
+st.write(
+    f"**This run will write into:** `{lecture_label_preview}` with date `{lecture_date.strftime('%b %d, %Y')}`"
+)
 
 st.divider()
 
@@ -457,8 +484,8 @@ if st.button("Process Attendance", type="primary"):
     else:
         with st.spinner("Processing files..."):
             result_file, message = process_attendance(
-                master_file,
-                poll_file,
+                master_file_obj=master_file,
+                poll_file_obj=poll_file,
                 lecture_number=int(lecture_number),
                 lecture_date=lecture_date,
                 poll_search_string=poll_string,
