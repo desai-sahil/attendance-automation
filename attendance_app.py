@@ -11,6 +11,13 @@ import streamlit as st
 
 
 # =========================================================
+# App constants
+# =========================================================
+APP_NAME = "Big Red Roll Call"
+CREATOR_LINE = "Created by: Sahil Desai (desai.sahil97@gmail.com)"
+
+
+# =========================================================
 # Helpers
 # =========================================================
 def _norm_email(x) -> str:
@@ -129,7 +136,7 @@ def _set_column_width(ws, col_idx: int, width: float):
 def _last_used_col_by_headers(ws, header_rows=(1, 2), min_col=1) -> int:
     """
     Returns the last column index that has any non-empty cell in the given header rows.
-    This avoids ws.max_column being inflated by formatting.
+    Avoids ws.max_column being inflated by formatting.
     """
     last = min_col
     for col in range(min_col, ws.max_column + 1):
@@ -143,7 +150,7 @@ def _last_used_col_by_headers(ws, header_rows=(1, 2), min_col=1) -> int:
 def _ensure_lecture_column(ws, lecture_label: str, lecture_date: date) -> int:
     """
     Ensure there is a column whose row2 equals lecture_label (case-insensitive).
-    If none exists, append it immediately after the last *actually used* header column.
+    If none exists, append immediately after the last *actually used* header column.
 
     Enforces formatting:
       - row1: date with "d-mmm" format
@@ -184,7 +191,7 @@ def _ensure_lecture_column(ws, lecture_label: str, lecture_date: date) -> int:
     c2.value = lecture_label_clean  # ensures capital L
 
     # 5) Make column wide enough to avoid #####
-    _set_column_width(ws, col_idx, 10)
+    _set_column_width(ws, col_idx, 12)
 
     # 6) Force attendance format for the column
     for r in range(3, ws.max_row + 1):
@@ -207,7 +214,7 @@ def process_attendance(
     backfill_names_if_blank: bool = True,
 ):
     """
-    Updates attendance for the specified lecture using the PollEverywhere export,
+    Updates attendance for a lecture using PollEverywhere export,
     and appends new students (email + names) found in Poll but missing from master.
 
     Master sheet expectations:
@@ -377,18 +384,18 @@ def process_attendance(
 # =========================================================
 # Streamlit UI
 # =========================================================
-st.set_page_config(page_title="Attendance Tool")
-st.title("Attendance Tool")
+st.set_page_config(page_title=APP_NAME)
+st.title(APP_NAME)
 
 st.markdown(
-    """
+    f"""
 This tool merges PollEverywhere reports into a Master Attendance Sheet.
 
-Created by: Sahil Desai (desai.sahil97@gmail.com)
+**{CREATOR_LINE}**
 """
 )
 
-with st.expander("How to use", expanded=True):
+with st.expander("How to use", expanded=False):
     st.markdown(
         """
 **Step 1 — Download your files**
