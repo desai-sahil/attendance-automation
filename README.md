@@ -4,7 +4,7 @@
 
 **Big Red Roll Call** is a Streamlit web app that automates attendance tracking by merging **PollEverywhere** exports into a **Master Excel attendance sheet**—without breaking formatting, headers, or manual edits.
 
-> **Generalized attendance rule (current version):**  
+> **Attendance rule (generalized):**  
 > A student is marked **present (1)** if their **email appears in the PollEverywhere export**, regardless of whether they answered any poll question.
 
 ---
@@ -38,23 +38,23 @@
 - **New student handling:**
   - If a student appears in the PollEverywhere export but isn’t in the master sheet, they are appended with:
     - Email
-    - Full name (`First Last`)
-    - Sortable name (`Last, First`)
+    - Full name (`First Last`) *(if available in the Poll export)*
+    - Sortable name (`Last, First`) *(if available in the Poll export)*
 - **Avoids “random far-right columns”:**
   - The app appends new lecture columns based on the **last real header column**, not Excel’s “max column” (which can be inflated by formatting).
 - **Zero-install / shareable:** Works via a browser when deployed on Streamlit Cloud.
 
 ---
 
-## Master Sheet Assumptions (Important)
+## Master Sheet Assumptions
 
 This tool expects a master sheet layout like:
 
-- **Row 1:** column headers + lecture date cells for lecture columns
+- **Row 1:** roster headers + lecture date cells for lecture columns
 - **Row 2:** lecture labels (e.g., `Lecture 1`, `Lecture 2`, …)
 - **Row 3+:** student rows
 
-And the roster columns include (case-insensitive match):
+Roster headers (case-insensitive match):
 - `Full name`
 - `Sortable name`
 - `Email`
@@ -64,26 +64,27 @@ And the roster columns include (case-insensitive match):
 
 ---
 
-## PollEverywhere Export Assumptions
+## PollEverywhere Export Requirements
 
-The PollEverywhere export must include a column named **Email** (case-insensitive).
+Your PollEverywhere export must include a column named:
 
-If available, the app also uses:
+- **Email** (case-insensitive)
+
+If the export includes:
 - `First name`
 - `Last name`
 
-to populate `Full name` and `Sortable name` when appending new students.
+then the app can also populate `Full name` and `Sortable name` for newly added students.
+
+> **Important:** Make sure your PollEverywhere export includes the students you consider “present.”  
+> Some export types only include students who responded at least once.
 
 ---
 
-## Attendance Logic (Generalized)
+## How Attendance Is Determined (Generalized)
 
-**Present = 1** if the student’s email appears anywhere in the PollEverywhere export.
-
-- This ignores “answered vs not answered”
-- It treats “listed in export” as attendance
-
-> **Note:** Depending on how PollEverywhere exports are configured, some export types may only include students who responded. If you need “present even if they never responded,” make sure you export a report that includes all participants/attendees.
+- **Present = 1** if the student’s email appears anywhere in the PollEverywhere export.
+- **Absent = 0** is written only when the attendance cell is blank (manual edits are preserved).
 
 ---
 
@@ -99,18 +100,18 @@ to populate `Full name` and `Sortable name` when appending new students.
    - Build a presence set: any valid email in the export ⇒ present
 
 3. **Master Sheet Merge**
-   - Find roster columns (`Email`, `Full name`, `Sortable name`)
-   - Ensure a lecture column exists (create if missing):
+   - Locate roster columns (`Email`, `Full name`, `Sortable name`)
+   - Ensure lecture column exists (create if missing):
      - Row 1 = date
      - Row 2 = lecture label (`Lecture X`)
-   - For each student in the master:
+   - Update attendance:
      - If present ⇒ write `1`
      - Else if attendance cell blank ⇒ write `0`
      - Else ⇒ do nothing (preserve manual edits)
 
 4. **Append New Students**
    - Add students in Poll export but missing from master
-   - Initialize their attendance for that lecture (`1` if present else `0`)
+   - Initialize their attendance for that lecture
 
 5. **Output**
    - Save to memory and return a downloadable updated `.xlsx`
