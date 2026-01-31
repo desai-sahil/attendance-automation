@@ -98,9 +98,7 @@ def _make_full_and_sortable(first: str, last: str):
 
 
 def _date_like_equal(a, b: date) -> bool:
-    """
-    Compare ws row1 cell (could be datetime/date/string) to a date object b.
-    """
+    """Compare ws row1 cell (could be datetime/date/string) to a date object b."""
     if a is None:
         return False
 
@@ -160,14 +158,14 @@ def _ensure_lecture_column(ws, lecture_label: str, lecture_date: date) -> int:
     lecture_label_clean = lecture_label.strip()
     lecture_label_l = lecture_label_clean.lower()
 
-    # 1) Find existing matches in row 2
+    # Find existing matches in row 2
     matches = []
     for col in range(1, ws.max_column + 1):
         v2 = ws.cell(row=2, column=col).value
         if _cell_text_lower(v2) == lecture_label_l:
             matches.append(col)
 
-    # 2) Choose best match if multiple
+    # Choose best match if multiple
     if len(matches) == 1:
         col_idx = matches[0]
     elif len(matches) > 1:
@@ -178,11 +176,11 @@ def _ensure_lecture_column(ws, lecture_label: str, lecture_date: date) -> int:
                 col_idx = c
                 break
     else:
-        # 3) Append after last REAL header column (not ws.max_column)
+        # Append after last REAL header column (not ws.max_column)
         last_used = _last_used_col_by_headers(ws, header_rows=(1, 2), min_col=1)
         col_idx = last_used + 1
 
-    # 4) Write headers
+    # Write headers
     c1 = ws.cell(row=1, column=col_idx)
     c1.value = lecture_date
     c1.number_format = "d-mmm"  # e.g. 23-Jan
@@ -190,10 +188,9 @@ def _ensure_lecture_column(ws, lecture_label: str, lecture_date: date) -> int:
     c2 = ws.cell(row=2, column=col_idx)
     c2.value = lecture_label_clean  # ensures capital L
 
-    # 5) Make column wide enough to avoid #####
     _set_column_width(ws, col_idx, 12)
 
-    # 6) Force attendance format for the column
+    # Force attendance format for the column
     for r in range(3, ws.max_row + 1):
         cell = ws.cell(row=r, column=col_idx)
         cell.number_format = "0"
@@ -203,19 +200,19 @@ def _ensure_lecture_column(ws, lecture_label: str, lecture_date: date) -> int:
 
 
 # =========================================================
-# Core logic
+# Core logic (GENERALIZED PRESENCE)
 # =========================================================
 def process_attendance(
     master_file_obj,
     poll_file_obj,
     lecture_number: int,
     lecture_date: date,
-    poll_search_string: str,
     backfill_names_if_blank: bool = True,
 ):
     """
-    Updates attendance for a lecture using PollEverywhere export,
-    and appends new students (email + names) found in Poll but missing from master.
+    GENERALIZED ATTENDANCE LOGIC:
+      Present (1) if the student appears in the PollEverywhere export (i.e., their email is listed),
+      regardless of whether they answered any question.
 
     Master sheet expectations:
       Row 1 = date headers for lecture columns (and normal headers for student info cols)
@@ -238,14 +235,9 @@ def process_attendance(
     if not any(str(c).strip().lower() == "email" for c in df_poll.columns):
         return None, "Poll report must contain a column named 'Email'."
 
-    # Find relevant poll question columns by substring match
-    target_poll_cols = [c for c in df_poll.columns if poll_search_string.lower() in str(c).lower()]
-    if not target_poll_cols:
-        return None, f"Could not find any Poll columns matching '{poll_search_string}'."
-
-    # Build poll roster + attendance map
+    # Build poll roster and presence map:
     poll_students = {}   # email -> {"first","last","full","sortable"}
-    attendance_map = {}  # email -> 1 if answered any target column
+    presence_map = {}    # email -> 1 (present if listed)
 
     for _, row in df_poll.iterrows():
         email = _norm_email(_pd_get_ci(row, "Email", ""))
@@ -257,16 +249,7 @@ def process_attendance(
         full, sortable = _make_full_and_sortable(first, last)
 
         poll_students[email] = {"first": first, "last": last, "full": full, "sortable": sortable}
-
-        answered_any = False
-        for col in target_poll_cols:
-            val = row[col]
-            if pd.notna(val) and str(val).strip() != "":
-                answered_any = True
-                break
-
-        if answered_any:
-            attendance_map[email] = 1
+        presence_map[email] = 1  # <-- key change: listed = present
 
     if not poll_students:
         return None, "No valid student emails were found in the Poll report."
@@ -308,7 +291,6 @@ def process_attendance(
         if email in master_email_to_row:
             continue
 
-        # Copy style from last student row for consistency
         if ws.max_row >= style_src_row:
             _copy_row_style(ws, style_src_row, append_row, max_col)
 
@@ -319,9 +301,9 @@ def process_attendance(
         if sortable_name_col_idx:
             ws.cell(row=append_row, column=sortable_name_col_idx).value = nm["sortable"]
 
-        # Initialize attendance
+        # Initialize attendance for new student
         att_cell = ws.cell(row=append_row, column=lecture_col_idx)
-        att_cell.value = 1 if email in attendance_map else 0
+        att_cell.value = 1 if email in presence_map else 0
         att_cell.number_format = "0"
         att_cell.alignment = Alignment(horizontal="center", vertical="center")
 
@@ -335,7 +317,7 @@ def process_attendance(
     backfilled_name_cells = 0
 
     for email, r in master_email_to_row.items():
-        if email in attendance_map:
+        if email in presence_map:
             cell = ws.cell(row=r, column=lecture_col_idx)
             cell.value = 1
             cell.number_format = "0"
@@ -350,7 +332,7 @@ def process_attendance(
                 cell.alignment = Alignment(horizontal="center", vertical="center")
                 wrote_zero_count += 1
 
-        # Optional name backfill
+        # Optional name backfill (only when blank in master)
         if backfill_names_if_blank and (email in poll_students):
             nm = poll_students[email]
             if full_name_col_idx:
@@ -371,7 +353,7 @@ def process_attendance(
 
     msg = (
         f"Success. Used column '{lecture_label}' dated {lecture_date.strftime('%b %d, %Y')}. "
-        f"Present=1 set for {updated_present_count} students. "
+        f"Present=1 set for {updated_present_count} students (listed in Poll report). "
         f"Absent=0 written for {wrote_zero_count} blank cells. "
         f"Added {added_count} new students. "
     )
@@ -409,16 +391,15 @@ with st.expander("How to use", expanded=False):
 **Step 3 — Enter lecture info**
 - Choose the **Lecture number**
 - Choose the **Lecture date**
-- Confirm the **Poll column search string** (defaults to `Lecture X`)
 
 **Step 4 — Process & download**
 - Click **Process Attendance**
 - Download the updated master sheet
 
-**Rules**
-- A student is marked **present (1)** if they answered **any** poll column matching the search string.
+**Attendance rule (generalized)**
+- A student is marked **present (1)** if their **email appears anywhere in the PollEverywhere export**.
+- Absences (**0**) are written **only if the attendance cell is blank**, to preserve manual edits.
 - Students in Poll but not in Master are **appended** (Email + Full name + Sortable name).
-- Absences (**0**) are written **only if the cell was blank**, to preserve manual edits.
 """
     )
 
@@ -436,13 +417,6 @@ with col2:
     lecture_number = st.number_input("Lecture number", min_value=1, step=1, value=1)
     lecture_date = st.date_input("Lecture date", value=date.today())
 
-    st.subheader("3) Poll matching")
-    poll_string = st.text_input(
-        "Poll column search string",
-        value=f"Lecture {int(lecture_number)}",
-        help="We mark a student present if they answered ANY poll column containing this string.",
-    )
-
     backfill_names = st.checkbox(
         "Backfill names for existing students (only if blank in master)",
         value=True,
@@ -450,8 +424,8 @@ with col2:
 
 lecture_label_preview = f"Lecture {int(lecture_number)}"
 st.info(
-    "Attendance logic: a student is marked present (1) if they answered ANY poll question column "
-    "that matches your search string. New students found in the Poll report are appended to the master sheet."
+    "Generalized attendance logic: a student is marked present (1) if their email appears in the "
+    "PollEverywhere export (listed), regardless of answers. New students in the Poll report are appended."
 )
 st.write(
     f"**This run will write into:** `{lecture_label_preview}` with date `{lecture_date.strftime('%b %d, %Y')}`"
@@ -460,8 +434,8 @@ st.write(
 st.divider()
 
 if st.button("Process Attendance", type="primary"):
-    if not master_file or not poll_file or not poll_string:
-        st.error("Please upload both files and fill in the Poll column search string.")
+    if not master_file or not poll_file:
+        st.error("Please upload both files.")
     else:
         with st.spinner("Processing files..."):
             result_file, message = process_attendance(
@@ -469,7 +443,6 @@ if st.button("Process Attendance", type="primary"):
                 poll_file_obj=poll_file,
                 lecture_number=int(lecture_number),
                 lecture_date=lecture_date,
-                poll_search_string=poll_string,
                 backfill_names_if_blank=backfill_names,
             )
 
@@ -489,6 +462,6 @@ if st.button("Process Attendance", type="primary"):
             )
 
 st.caption(
-    "Tip: Keep your Master sheet headers consistent (Full name, Sortable name, Email). "
+    "Tip: Keep your Master sheet roster headers consistent (Full name, Sortable name, Email). "
     "The app creates a new lecture column automatically if it doesn't exist."
 )
