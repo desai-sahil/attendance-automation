@@ -380,6 +380,9 @@ This tool merges PollEverywhere reports into a Master Attendance Sheet.
 with st.expander("How to use", expanded=False):
     st.markdown(
         """
+**Step 0 — Make sure emails are included**
+- Confirm both the **Master Excel** and the **PollEverywhere export (CSV/XLSX)** include a student email column (e.g., `student123@cornell.edu`).
+
 **Step 1 — Download your files**
 - Export the **PollEverywhere** report as CSV (or XLSX).
 - Download your **Master Attendance Sheet** as XLSX.
@@ -402,6 +405,7 @@ with st.expander("How to use", expanded=False):
 - Students in Poll but not in Master are **appended** (Email + Full name + Sortable name).
 """
     )
+
 
 st.divider()
 
