@@ -1,6 +1,7 @@
 import io
 from copy import copy
 from datetime import datetime, date
+from pathlib import Path
 
 import openpyxl
 from openpyxl.utils import get_column_letter
@@ -15,6 +16,10 @@ import streamlit as st
 # =========================================================
 APP_NAME = "Big Red Roll Call"
 CREATOR_LINE = "Created by: Sahil Desai (desai.sahil97@gmail.com)"
+
+# Put your logo file here in the repo:
+#   assets/big_red_roll_call_logo.png
+LOGO_REL_PATH = Path("assets") / "big_red_roll_call_logo.png"
 
 
 # =========================================================
@@ -235,7 +240,7 @@ def process_attendance(
     if not any(str(c).strip().lower() == "email" for c in df_poll.columns):
         return None, "Poll report must contain a column named 'Email'."
 
-    # Build poll roster and presence map:
+    # Build poll roster and presence map
     poll_students = {}   # email -> {"first","last","full","sortable"}
     presence_map = {}    # email -> 1 (present if listed)
 
@@ -249,7 +254,7 @@ def process_attendance(
         full, sortable = _make_full_and_sortable(first, last)
 
         poll_students[email] = {"first": first, "last": last, "full": full, "sortable": sortable}
-        presence_map[email] = 1  # <-- key change: listed = present
+        presence_map[email] = 1  # listed = present
 
     if not poll_students:
         return None, "No valid student emails were found in the Poll report."
@@ -366,7 +371,17 @@ def process_attendance(
 # =========================================================
 # Streamlit UI
 # =========================================================
-st.set_page_config(page_title=APP_NAME)
+# NOTE: set_page_config must come before any other st.* calls.
+st.set_page_config(page_title=APP_NAME, page_icon="🟥", layout="centered")
+
+# --- Logo (safe load) ---
+logo_path = (Path(__file__).parent / LOGO_REL_PATH).resolve()
+if logo_path.exists():
+    st.image(str(logo_path), use_container_width=True)
+else:
+    # If the logo isn't present, the app still runs. This helps during development.
+    st.caption(f"(Logo not found at: {LOGO_REL_PATH}. Add it to your repo to display it.)")
+
 st.title(APP_NAME)
 
 st.markdown(
@@ -405,7 +420,6 @@ with st.expander("How to use", expanded=False):
 - Students in Poll but not in Master are **appended** (Email + Full name + Sortable name).
 """
     )
-
 
 st.divider()
 
