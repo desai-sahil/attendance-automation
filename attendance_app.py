@@ -1,62 +1,13 @@
 import io
-import os
 from copy import copy
 from datetime import datetime, date
-from zoneinfo import ZoneInfo
 
 import openpyxl
 from openpyxl.utils import get_column_letter
 from openpyxl.styles import Alignment
 
 import pandas as pd
-import requests
 import streamlit as st
-
-
-# =========================================================
-# GitHub "Last updated" helper
-# =========================================================
-@st.cache_data(ttl=3600)  # cache for 1 hour (avoids rate-limit pain)
-def get_github_last_updated_str() -> str | None:
-    """
-    Returns a formatted "Last updated" timestamp from the most recent commit
-    that touched the configured file path in a GitHub repo.
-
-    Configure via Streamlit Secrets (preferred) or environment variables:
-      - GITHUB_OWNER
-      - GITHUB_REPO
-      - GITHUB_BRANCH
-      - GITHUB_FILE_PATH
-      - GITHUB_TOKEN (optional)
-    """
-    owner = st.secrets.get("GITHUB_OWNER", os.getenv("GITHUB_OWNER", "")).strip()
-    repo = st.secrets.get("GITHUB_REPO", os.getenv("GITHUB_REPO", "")).strip()
-    branch = st.secrets.get("GITHUB_BRANCH", os.getenv("GITHUB_BRANCH", "main")).strip()
-    path = st.secrets.get("GITHUB_FILE_PATH", os.getenv("GITHUB_FILE_PATH", "")).strip()
-    token = st.secrets.get("GITHUB_TOKEN", os.getenv("GITHUB_TOKEN", "")).strip()
-
-    if not (owner and repo and path):
-        return None
-
-    url = f"https://api.github.com/repos/{owner}/{repo}/commits"
-    params = {"path": path, "sha": branch, "per_page": 1}
-    headers = {"Accept": "application/vnd.github+json"}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-
-    try:
-        r = requests.get(url, params=params, headers=headers, timeout=10)
-        r.raise_for_status()
-        data = r.json()
-        if not data:
-            return None
-
-        iso_dt = data[0]["commit"]["committer"]["date"]  # e.g. 2026-01-28T15:04:05Z
-        dt_utc = datetime.fromisoformat(iso_dt.replace("Z", "+00:00"))
-        dt_local = dt_utc.astimezone(ZoneInfo("America/New_York"))
-        return dt_local.strftime("%b %d, %Y %I:%M %p ET")
-    except Exception:
-        return None
 
 
 # =========================================================
@@ -426,20 +377,43 @@ def process_attendance(
 # =========================================================
 # Streamlit UI
 # =========================================================
-st.set_page_config(page_title="BioNB 2220 Attendance Tool")
-st.title("BioNB 2220 Attendance Tool")
-
-last_updated = get_github_last_updated_str()
-last_updated_line = f"Last updated: {last_updated}" if last_updated else "Last updated: (not configured)"
+st.set_page_config(page_title="Attendance Tool")
+st.title("Attendance Tool")
 
 st.markdown(
-    f"""
-This tool merges PollEverywhere reports into the Master Attendance Sheet.
+    """
+This tool merges PollEverywhere reports into a Master Attendance Sheet.
 
-Created by: Sahil Desai  
-{last_updated_line}
+Created by: Sahil Desai (desai.sahil97@gmail.com)
 """
 )
+
+with st.expander("How to use", expanded=True):
+    st.markdown(
+        """
+**Step 1 — Download your files**
+- Export the **PollEverywhere** report as CSV (or XLSX).
+- Download your **Master Attendance Sheet** as XLSX.
+
+**Step 2 — Upload**
+- Upload the Master Excel file
+- Upload the Poll report
+
+**Step 3 — Enter lecture info**
+- Choose the **Lecture number**
+- Choose the **Lecture date**
+- Confirm the **Poll column search string** (defaults to `Lecture X`)
+
+**Step 4 — Process & download**
+- Click **Process Attendance**
+- Download the updated master sheet
+
+**Rules**
+- A student is marked **present (1)** if they answered **any** poll column matching the search string.
+- Students in Poll but not in Master are **appended** (Email + Full name + Sortable name).
+- Absences (**0**) are written **only if the cell was blank**, to preserve manual edits.
+"""
+    )
 
 st.divider()
 
@@ -508,6 +482,6 @@ if st.button("Process Attendance", type="primary"):
             )
 
 st.caption(
-    "GitHub Last Updated setup: add Secrets for GITHUB_OWNER, GITHUB_REPO, GITHUB_BRANCH, GITHUB_FILE_PATH "
-    "(and optionally GITHUB_TOKEN)."
+    "Tip: Keep your Master sheet headers consistent (Full name, Sortable name, Email). "
+    "The app creates a new lecture column automatically if it doesn't exist."
 )
