@@ -14,7 +14,7 @@ import streamlit as st
 # =========================================================
 # App constants
 # =========================================================
-APP_NAME = "Big Red Roll Call"
+APP_NAME = None #"Big Red Roll Call"
 CREATOR_LINE = "Created by: Sahil Desai (desai.sahil97@gmail.com)"
 
 # Put your logo file here in the repo:
