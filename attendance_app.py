@@ -14,9 +14,8 @@ import streamlit as st
 # =========================================================
 # App constants
 # =========================================================
-APP_NAME = "Roll Call"
-CREATOR_LINE = "Created by Sahil Desai"
-CREATOR_EMAIL = "desai.sahil97@gmail.com"
+APP_NAME = "Big Red Roll Call"
+CREATOR_LINE = "Created by: Sahil Desai (desai.sahil97@gmail.com)"
 
 # Put your logo file here in the repo:
 #   assets/big_red_roll_call_logo.png
@@ -370,299 +369,69 @@ def process_attendance(
 
 
 # =========================================================
-# Streamlit UI with Apple-inspired Design
+# Streamlit UI
 # =========================================================
-
 # NOTE: set_page_config must come before any other st.* calls.
-st.set_page_config(page_title=APP_NAME, page_icon="📊", layout="centered")
+st.set_page_config(page_title=APP_NAME, page_icon="🟥", layout="centered")
 
-# Custom CSS for Apple-inspired design
-st.markdown("""
-<style>
-    /* Import SF Pro font fallback */
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-    
-    /* Global styles */
-    .stApp {
-        background: #f5f5f7;
-    }
-    
-    /* Main content wrapper */
-    .main .block-container {
-        padding-top: 3rem;
-        padding-bottom: 3rem;
-        max-width: 980px;
-    }
-    
-    /* Typography overrides */
-    h1, h2, h3, h4, h5, h6, p, span, div, label {
-        font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Inter', system-ui, sans-serif !important;
-        letter-spacing: -0.01em;
-    }
-    
-    h1 {
-        font-size: 48px !important;
-        font-weight: 700 !important;
-        color: #1d1d1f !important;
-        margin-bottom: 0.5rem !important;
-        text-align: center;
-    }
-    
-    /* Card-like containers */
-    .stContainer, div[data-testid="stVerticalBlock"] > div[data-testid="stVerticalBlock"] {
-        background: rgba(255, 255, 255, 0.8);
-        backdrop-filter: blur(20px);
-        border-radius: 24px;
-        padding: 2rem;
-        border: 1px solid rgba(0, 0, 0, 0.06);
-        box-shadow: 0 4px 30px rgba(0, 0, 0, 0.05);
-    }
-    
-    /* File uploader styling */
-    .stFileUploader {
-        background: #fafafa;
-        border: 2px dashed #d2d2d7;
-        border-radius: 16px;
-        padding: 2rem 1.5rem;
-        transition: all 0.3s ease;
-    }
-    
-    .stFileUploader:hover {
-        border-color: #0071e3;
-        background: #f5f5f7;
-        transform: translateY(-2px);
-    }
-    
-    .stFileUploader label {
-        font-size: 15px !important;
-        color: #1d1d1f !important;
-        font-weight: 500 !important;
-    }
-    
-    /* Number input styling */
-    .stNumberInput input {
-        border: 1px solid #d2d2d7;
-        border-radius: 12px;
-        padding: 14px 16px;
-        font-size: 15px;
-        transition: all 0.2s;
-        background: white;
-    }
-    
-    .stNumberInput input:focus {
-        border-color: #0071e3;
-        box-shadow: 0 0 0 4px rgba(0, 113, 227, 0.1);
-        outline: none;
-    }
-    
-    /* Date input styling */
-    .stDateInput input {
-        border: 1px solid #d2d2d7;
-        border-radius: 12px;
-        padding: 14px 16px;
-        font-size: 15px;
-        transition: all 0.2s;
-        background: white;
-    }
-    
-    .stDateInput input:focus {
-        border-color: #0071e3;
-        box-shadow: 0 0 0 4px rgba(0, 113, 227, 0.1);
-        outline: none;
-    }
-    
-    /* Checkbox styling */
-    .stCheckbox {
-        background: #f5f5f7;
-        padding: 1rem;
-        border-radius: 12px;
-        transition: all 0.2s;
-    }
-    
-    .stCheckbox:hover {
-        background: #e8e8ed;
-    }
-    
-    .stCheckbox label {
-        font-size: 14px !important;
-        color: #1d1d1f !important;
-        line-height: 1.5 !important;
-    }
-    
-    /* Button styling */
-    .stButton button {
-        background: linear-gradient(135deg, #0071e3 0%, #0077ed 100%);
-        color: white;
-        border: none;
-        border-radius: 12px;
-        padding: 14px 32px;
-        font-size: 17px;
-        font-weight: 600;
-        transition: all 0.2s;
-        width: 100%;
-        box-shadow: 0 4px 12px rgba(0, 113, 227, 0.3);
-    }
-    
-    .stButton button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 6px 20px rgba(0, 113, 227, 0.4);
-    }
-    
-    .stButton button:active {
-        transform: translateY(0);
-    }
-    
-    /* Download button */
-    .stDownloadButton button {
-        background: linear-gradient(135deg, #34c759 0%, #30d158 100%);
-        color: white;
-        border: none;
-        border-radius: 12px;
-        padding: 14px 32px;
-        font-size: 17px;
-        font-weight: 600;
-        transition: all 0.2s;
-        width: 100%;
-        box-shadow: 0 4px 12px rgba(52, 199, 89, 0.3);
-    }
-    
-    .stDownloadButton button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 6px 20px rgba(52, 199, 89, 0.4);
-    }
-    
-    /* Info box */
-    .stInfo {
-        background: rgba(0, 113, 227, 0.08);
-        border-left: 4px solid #0071e3;
-        border-radius: 12px;
-        padding: 1rem 1.5rem;
-    }
-    
-    /* Success message */
-    .stSuccess {
-        background: rgba(52, 199, 89, 0.08);
-        border-left: 4px solid #34c759;
-        border-radius: 12px;
-        padding: 1rem 1.5rem;
-    }
-    
-    /* Error message */
-    .stError {
-        background: rgba(255, 59, 48, 0.08);
-        border-left: 4px solid #ff3b30;
-        border-radius: 12px;
-        padding: 1rem 1.5rem;
-    }
-    
-    /* Expander */
-    .streamlit-expanderHeader {
-        background: rgba(255, 255, 255, 0.6);
-        border-radius: 12px;
-        border: 1px solid rgba(0, 0, 0, 0.05);
-        font-size: 15px;
-        font-weight: 500;
-        color: #1d1d1f;
-    }
-    
-    .streamlit-expanderHeader:hover {
-        background: rgba(255, 255, 255, 0.8);
-    }
-    
-    /* Divider */
-    hr {
-        border: none;
-        height: 1px;
-        background: rgba(0, 0, 0, 0.08);
-        margin: 2rem 0;
-    }
-    
-    /* Subheader styling */
-    .stSubheader {
-        font-size: 28px !important;
-        font-weight: 600 !important;
-        color: #1d1d1f !important;
-        margin-bottom: 1.5rem !important;
-    }
-    
-    /* Caption/small text */
-    .stCaption {
-        font-size: 14px !important;
-        color: #86868b !important;
-    }
-    
-    /* Section number badges */
-    .section-number {
-        display: inline-block;
-        width: 32px;
-        height: 32px;
-        background: #f5f5f7;
-        border-radius: 8px;
-        text-align: center;
-        line-height: 32px;
-        font-size: 15px;
-        font-weight: 600;
-        margin-right: 12px;
-        color: #1d1d1f;
-    }
-    
-    /* Spinner */
-    .stSpinner > div {
-        border-color: #0071e3 transparent transparent transparent !important;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# Header section
-st.markdown("""
-<div style="text-align: center; margin-bottom: 3rem; animation: fadeIn 0.8s ease-out;">
-    <div style="width: 64px; height: 64px; margin: 0 auto 1.5rem; background: linear-gradient(135deg, #FF3B30 0%, #C7001F 100%); border-radius: 18px; display: flex; align-items: center; justify-content: center; box-shadow: 0 8px 30px rgba(255, 59, 48, 0.25);">
-        <svg width="36" height="36" viewBox="0 0 24 24" fill="white">
-            <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 3c1.93 0 3.5 1.57 3.5 3.5S13.93 13 12 13s-3.5-1.57-3.5-3.5S10.07 6 12 6zm7 13H5v-.23c0-.62.28-1.2.76-1.58C7.47 15.82 9.64 15 12 15s4.53.82 6.24 2.19c.48.38.76.97.76 1.58V19z"/>
-        </svg>
-    </div>
-</div>
-""", unsafe_allow_html=True)
+# --- Logo (safe load) ---
+logo_path = (Path(__file__).parent / LOGO_REL_PATH).resolve()
+if logo_path.exists():
+    st.image(str(logo_path), use_container_width=True)
+else:
+    # If the logo isn't present, the app still runs. This helps during development.
+    st.caption(f"(Logo not found at: {LOGO_REL_PATH}. Add it to your repo to display it.)")
 
 st.title(APP_NAME)
 
-st.markdown(f"""
-<div style="text-align: center; margin-bottom: 2rem;">
-    <p style="font-size: 19px; color: #86868b; margin-bottom: 1rem;">
-        Merge attendance reports into a unified master sheet
-    </p>
-    <p style="font-size: 14px; color: #86868b;">
-        {CREATOR_LINE} · <a href="mailto:{CREATOR_EMAIL}" style="color: #0071e3; text-decoration: none;">{CREATOR_EMAIL}</a>
-    </p>
-</div>
-""", unsafe_allow_html=True)
+st.markdown(
+    f"""
+This tool merges PollEverywhere reports into a Master Attendance Sheet.
+
+**{CREATOR_LINE}**
+"""
+)
 
 with st.expander("How to use", expanded=False):
-    st.markdown("""
-    **Confirm emails are included**  
-    Both the Master Excel and PollEverywhere export must include a student email column.
+    st.markdown(
+        """
+**Step 0 — Make sure emails are included**
+- Confirm both the **Master Excel** and the **PollEverywhere export (CSV/XLSX)** include a student email column (e.g., `student123@cornell.edu`).
 
-    **Download your files**  
-    Export the PollEverywhere report as CSV or XLSX, and download your Master Attendance Sheet.
+**Step 1 — Download your files**
+- Export the **PollEverywhere** report as CSV (or XLSX).
+- Download your **Master Attendance Sheet** as XLSX.
 
-    **Upload & configure**  
-    Upload both files, choose the lecture number and date, then process.
+**Step 2 — Upload**
+- Upload the Master Excel file
+- Upload the Poll report
 
-    **Attendance logic**  
-    A student is marked present (1) if their email appears in the PollEverywhere export. Absences (0) are only written if the cell is blank.
-    """)
+**Step 3 — Enter lecture info**
+- Choose the **Lecture number**
+- Choose the **Lecture date**
+
+**Step 4 — Process & download**
+- Click **Process Attendance**
+- Download the updated master sheet
+
+**Attendance rule (generalized)**
+- A student is marked **present (1)** if their **email appears anywhere in the PollEverywhere export**.
+- Absences (**0**) are written **only if the attendance cell is blank**, to preserve manual edits.
+- Students in Poll but not in Master are **appended** (Email + Full name + Sortable name).
+"""
+    )
 
 st.divider()
 
 col1, col2 = st.columns(2)
 
 with col1:
-    st.markdown('<h3 style="font-size: 28px; font-weight: 600; margin-bottom: 1.5rem;"><span class="section-number">1</span>Upload Files</h3>', unsafe_allow_html=True)
-    master_file = st.file_uploader("Master Excel", type=["xlsx"], key="master")
-    poll_file = st.file_uploader("Poll Report", type=["csv", "xlsx"], key="poll")
+    st.subheader("1) Upload files")
+    master_file = st.file_uploader("Upload Master Excel (xlsx)", type=["xlsx"])
+    poll_file = st.file_uploader("Upload Poll report (csv/xlsx)", type=["csv", "xlsx"])
 
 with col2:
-    st.markdown('<h3 style="font-size: 28px; font-weight: 600; margin-bottom: 1.5rem;"><span class="section-number">2</span>Lecture Settings</h3>', unsafe_allow_html=True)
+    st.subheader("2) Lecture settings")
     lecture_number = st.number_input("Lecture number", min_value=1, step=1, value=1)
     lecture_date = st.date_input("Lecture date", value=date.today())
 
@@ -671,19 +440,20 @@ with col2:
         value=True,
     )
 
-st.divider()
-
 lecture_label_preview = f"Lecture {int(lecture_number)}"
-
 st.info(
+    "Generalized attendance logic: a student is marked present (1) if their email appears in the "
+    "PollEverywhere export (listed), regardless of answers. New students in the Poll report are appended."
+)
+st.write(
     f"**This run will write into:** `{lecture_label_preview}` with date `{lecture_date.strftime('%b %d, %Y')}`"
 )
 
-st.markdown("<br>", unsafe_allow_html=True)
+st.divider()
 
 if st.button("Process Attendance", type="primary"):
     if not master_file or not poll_file:
-        st.error("Please upload both files to continue.")
+        st.error("Please upload both files.")
     else:
         with st.spinner("Processing files..."):
             result_file, message = process_attendance(
@@ -709,9 +479,7 @@ if st.button("Process Attendance", type="primary"):
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
 
-st.markdown("<br><br>", unsafe_allow_html=True)
-
 st.caption(
-    "Keep your Master sheet roster headers consistent (Full name, Sortable name, Email). "
+    "Tip: Keep your Master sheet roster headers consistent (Full name, Sortable name, Email). "
     "The app creates a new lecture column automatically if it doesn't exist."
 )
